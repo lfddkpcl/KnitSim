@@ -40,7 +40,7 @@ export class FabricSimulation {
   private cloth: Cloth | null = null;
   private clothMesh: THREE.Mesh | null = null;
   private springLines: THREE.LineSegments | null = null;
-  private solidKey: SolidKey = "none";
+  private solidKey: SolidKey = "human";
   private solidMesh: THREE.Object3D | null = null;
   private generatedSettings: SimulateSettings | null = null;
 
@@ -82,11 +82,12 @@ export class FabricSimulation {
   generate() {
     try {
       const settings = { ...this.settings };
-      const layout = this.getValidatedLayout(settings);
-      if (!layout) return;
+      this.isRunning = false;
+      this.stopLoop();
+      this.disposeCloth();
       this.setSolid(settings.solid);
-      this.buildCloth(layout, settings);
-      this.generatedSettings = settings;
+      this.generatedSettings = null;
+      this.stepCount = 0;
       this.isDropResettable = false;
       this.resetSettling();
       this.isPreviewVisible = true;
@@ -99,7 +100,7 @@ export class FabricSimulation {
   }
 
   togglePreview() {
-    if (!this.cloth) return;
+    if (!this.solidMesh) return;
     this.isPreviewVisible = !this.isPreviewVisible;
     if (this.isPreviewVisible) {
       this.showContent();

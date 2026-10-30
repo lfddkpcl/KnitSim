@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { createHumanBust, HUMAN_BUST_HEIGHT, humanBustDistance, projectOutOfHumanBust } from "@/simulate/humanBust";
 import type { SolidKey } from "@/simulate/simulate.types";
 
 export type Solid = {
@@ -8,30 +9,18 @@ export type Solid = {
   centerY: number;
   sdf: (x: number, y: number, z: number) => number;
   createMesh: (material: THREE.Material) => THREE.Object3D;
+  projectOut?: (positions: Float32Array, offset: number, margin: number) => boolean;
 };
 
-const SPHERE_RADIUS = 1.25;
-
 export const SOLIDS: Record<SolidKey, Solid> = {
-  sphere: {
-    label: "Sphere",
-    topY: SPHERE_RADIUS * 2,
-    boundingRadius: 1.4,
-    centerY: SPHERE_RADIUS,
-    sdf: (x, y, z) => Math.hypot(x, y - SPHERE_RADIUS, z) - SPHERE_RADIUS,
-    createMesh: (material) => {
-      const mesh = new THREE.Mesh(new THREE.SphereGeometry(SPHERE_RADIUS, 56, 36), material);
-      mesh.position.y = SPHERE_RADIUS;
-      return mesh;
-    },
-  },
-  none: {
-    label: "No Object",
-    topY: 0,
-    boundingRadius: 0,
-    centerY: 0,
-    sdf: () => 1,
-    createMesh: () => new THREE.Group(),
+  human: {
+    label: "Androgenous Human",
+    topY: HUMAN_BUST_HEIGHT,
+    boundingRadius: 3,
+    centerY: HUMAN_BUST_HEIGHT / 2,
+    sdf: humanBustDistance,
+    createMesh: createHumanBust,
+    projectOut: projectOutOfHumanBust,
   },
 };
 
@@ -59,6 +48,7 @@ export const pushOutOfSolid = (solid: Solid, positions: Float32Array, offset: nu
   const y = positions[offset + 1];
   const z = positions[offset + 2];
   if (x * x + (y - solid.centerY) ** 2 + z * z > solid.boundingRadius * solid.boundingRadius) return false;
+  if (solid.projectOut) return solid.projectOut(positions, offset, margin);
 
   const distance = solid.sdf(x, y, z);
   if (distance >= margin) return false;

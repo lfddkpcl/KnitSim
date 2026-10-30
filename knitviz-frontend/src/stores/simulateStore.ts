@@ -18,7 +18,7 @@ const createDefaultSettings = (): SimulateSettings => {
     groundColor: wool.baseColor,
     patternColor: PATTERN_COLORS.pattern,
     patternScale: 1,
-    solid: "sphere",
+    solid: "human",
   };
 };
 

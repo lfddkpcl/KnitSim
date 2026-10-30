@@ -2,7 +2,7 @@ export type FabricShape = "square" | "circle";
 export type FabricMaterialKey = "wool" | "silk";
 export type FabricPrint = "solid" | "stripes" | "dots";
 export type FabricStructure = "knit" | "smooth";
-export type SolidKey = "sphere" | "none";
+export type SolidKey = "human";
 
 export type SimulateSettings = {
   shape: FabricShape;

@@ -103,10 +103,6 @@ const simulationLabel = computed(() => {
     return STATUS_LABELS.UNAVAILABLE;
   }
 
-  if (isSimulateTab.value) {
-    return preview.isDropResettable ? STATUS_LABELS.RESET_DROP : STATUS_LABELS.DROP_FABRIC;
-  }
-
   return preview.isRunning ? STATUS_LABELS.STOP : STATUS_LABELS.START;
 });
 
@@ -288,7 +284,7 @@ const renderGraph = () => {
 };
 
 const maybeStartSimulation = () => {
-  if (simulationDisabled.value) {
+  if (isSimulateTab.value || simulationDisabled.value) {
     return;
   }
 
@@ -475,6 +471,7 @@ watch(isFlipped, (enabled) => {
           </Btn>
           <Btn btn_width="8rem" btn_height="2.7rem" @click="renderGraph">{{ runLabel }}</Btn>
           <Btn
+            v-if="!isSimulateTab"
             btn_width="10rem"
             btn_height="2.7rem"
             :disabled="simulationDisabled"

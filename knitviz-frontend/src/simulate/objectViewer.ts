@@ -1,7 +1,6 @@
 import * as THREE from "three";
 import { createSolidMaterial, disposeObject, SOLIDS } from "@/simulate/solids";
 import type { SolidKey } from "@/simulate/simulate.types";
-import { PREVIEW_BACKGROUND } from "@/three/previewFloor";
 import { PreviewOrbit } from "@/three/previewOrbit";
 
 export class ObjectViewer {
@@ -16,7 +15,6 @@ export class ObjectViewer {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
     this.renderer.setClearAlpha(0);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.scene.background = new THREE.Color(PREVIEW_BACKGROUND);
     this.camera.position.set(4, 3.2, 5);
     this.orbit = new PreviewOrbit(this.camera, canvas, {
       target: new THREE.Vector3(0, 1, 0),
@@ -33,10 +31,8 @@ export class ObjectViewer {
 
   show(solid: SolidKey) {
     this.clearSolidObject();
-    if (solid !== "none") {
-      this.solidObject = SOLIDS[solid].createMesh(this.material);
-      this.scene.add(this.solidObject);
-    }
+    this.solidObject = SOLIDS[solid].createMesh(this.material);
+    this.scene.add(this.solidObject);
     this.resize();
     this.frame();
   }
