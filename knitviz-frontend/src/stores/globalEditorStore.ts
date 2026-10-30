@@ -20,6 +20,7 @@ export enum EditorType {
   GRID = "grid",
   VISUAL = "visual",
   NODE = "node",
+  SIMULATE = "simulate",
 }
 
 export const useGlobalEditorStore = defineStore("globalEditor", () => {

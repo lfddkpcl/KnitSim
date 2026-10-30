@@ -1,5 +1,5 @@
 import { toRaw } from "vue";
-import { KnitEdge, KnitGraph, KnitNodeType } from "..";
+import { KnitEdge, KnitEdgeDirection, KnitGraph, KnitNodeType } from "..";
 import type { GraphConfig, KnitGraphC, KnitSim } from "../sim/knitsim-lib";
 import { KnitSimModule } from "./viz";
 
@@ -11,6 +11,7 @@ export class KnitGraph3D extends KnitGraph<KnitNode3D, KnitEdge> {
   graph_wasm: KnitGraphC;
   graph_sim: KnitSim;
   cfg: GraphConfig;
+  round: boolean = false;
 
   constructor(graph: KnitGraph) {
     super();
@@ -27,6 +28,34 @@ export class KnitGraph3D extends KnitGraph<KnitNode3D, KnitEdge> {
     }
 
     this.assertIntegrity();
+    this.detectRound();
+    this.markDecreaseMerges();
+  }
+
+  private markDecreaseMerges() {
+    const columnTargetCount = new Map<number, number>();
+    for (const edge of this.edges) {
+      if (edge.direction !== KnitEdgeDirection.COLUMN) continue;
+      columnTargetCount.set(edge.to, (columnTargetCount.get(edge.to) ?? 0) + 1);
+    }
+    for (const edge of this.edges) {
+      if (edge.direction !== KnitEdgeDirection.COLUMN) continue;
+      const fanIn = columnTargetCount.get(edge.to) ?? 1;
+      if (fanIn > 1) this.nodes[edge.from].mergeFanIn = fanIn;
+    }
+  }
+
+  private detectRound() {
+    this.round = this.edges.some((edge) => {
+      const from = this.nodes[edge.from];
+      const to = this.nodes[edge.to];
+      return (
+        edge.direction === KnitEdgeDirection.ROW &&
+        to.start_of_row &&
+        from.row_number === to.row_number &&
+        from.col_number > to.col_number
+      );
+    });
   }
 
   private assertIntegrity() {
@@ -47,6 +76,7 @@ export class KnitGraph3D extends KnitGraph<KnitNode3D, KnitEdge> {
       }
     }
   }
+
   step(time: number) {
     if (!this.graph_wasm) {
       return;
@@ -54,9 +84,55 @@ export class KnitGraph3D extends KnitGraph<KnitNode3D, KnitEdge> {
     console.log("Stepping sim", time, this.graph_wasm, this.graph_wasm.isDeleted());
     let accumulated_movement = this.graph_sim.step(time, 0.1, 0.2);
     console.log("Accumulated movement", accumulated_movement);
+    if (!Number.isFinite(accumulated_movement)) {
+      throw new Error("Simulation produced an invalid physics state.");
+    }
     this.graph_wasm.computeKnitPaths(this.cfg.loop_width, true);
     this.syncGraphWASM();
     return accumulated_movement;
+  }
+
+  knitPathPoints(node: KnitNode3D) {
+    const knitPath = this.graph_wasm.knitPath(node.id);
+    return new Array(knitPath.size()).fill(0).map((_, id) => {
+      const vec = knitPath.get(id);
+      return new THREE.Vector3(vec.x, vec.y, vec.z);
+    });
+  }
+
+  hasIncreaseAfter(node: KnitNode3D) {
+    const currentRow = Object.values(this.nodes).filter(
+      (candidate) => candidate.row_number === node.row_number,
+    );
+    const nextRowNumber = Math.min(
+      ...Object.values(this.nodes)
+        .map((candidate) => candidate.row_number)
+        .filter((rowNumber) => rowNumber > node.row_number),
+    );
+    if (!Number.isFinite(nextRowNumber)) {
+      return false;
+    }
+
+    const nextRow = Object.values(this.nodes).filter(
+      (candidate) => candidate.row_number === nextRowNumber,
+    );
+    if (nextRow.length > currentRow.length) {
+      return true;
+    }
+
+    const currentIds = new Set(currentRow.map((candidate) => candidate.id));
+    const nextIds = new Set(nextRow.map((candidate) => candidate.id));
+    const columnTargets = new Map<number, number>();
+    for (const edge of this.edges) {
+      if (
+        edge.direction === KnitEdgeDirection.COLUMN &&
+        currentIds.has(edge.from) &&
+        nextIds.has(edge.to)
+      ) {
+        columnTargets.set(edge.from, (columnTargets.get(edge.from) ?? 0) + 1);
+      }
+    }
+    return [...columnTargets.values()].some((count) => count > 1);
   }
 
   syncGraphWASM() {
@@ -76,18 +152,13 @@ export class KnitGraph3D extends KnitGraph<KnitNode3D, KnitEdge> {
       let force = this.graph_sim.force(node.id);
       node.force.set(force.x, force.y, force.z);
 
-      let knitPath = this.graph_wasm.knitPath(node.id);
-
-      let knitPathArr = new Array(knitPath.size()).fill(0).map((_, id) => {
-        let vec = knitPath.get(id);
-        return new THREE.Vector3(vec.x, vec.y, vec.z);
-      });
+      const knitPathPoints = this.knitPathPoints(node);
       if (node.mesh) {
-        node.curve.points = knitPathArr;
+        node.curve.points = knitPathPoints;
         node.yarn_geometry.dispose();
         node.yarn_geometry = new THREE.TubeGeometry(
           node.curve,
-          knitPathArr.length * 4,
+          knitPathPoints.length * 4,
           node.yarnSpec.weight * this.cfg.yarn_thickness,
           4,
           true,

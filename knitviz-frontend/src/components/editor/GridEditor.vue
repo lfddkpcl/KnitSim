@@ -17,7 +17,7 @@ import {
 } from "@/components/editor/editor.constants";
 import type { GridCellState, GridEditorState } from "@/components/editor/editor.types";
 
-const STITCH_OPTIONS = ["KNIT", "PURL", "YARN_OVER"] as const;
+const STITCH_OPTIONS = ["KNIT", "PURL", "YARN_OVER", "DECREASE"] as const;
 const PAINT_MODES = ["COLOR_AND_STITCH", "COLOR_ONLY"] as const;
 const CAST_ON_MODES = ["round", "flat"] as const;
 const LABEL_MODES = ["ABBREVIATION", "UNICODE"] as const;
@@ -178,12 +178,14 @@ const symbolSets = {
 		KNIT: "K",
 		PURL: "P",
 		YARN_OVER: "YO",
+		DECREASE: "DEC",
 		KNIT_OVER: "YO",
 	},
 	UNICODE: {
 		KNIT: "■",
 		PURL: "●",
 		YARN_OVER: "○",
+		DECREASE: "∧",
 		KNIT_OVER: "○",
 	},
 } as const;

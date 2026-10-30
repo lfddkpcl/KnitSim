@@ -14,11 +14,13 @@ namespace knitsim {
     float loop_width;
     Eigen::Vector3f up_vector;
     Eigen::Vector3f right_vector;
+    bool flatten_round_top;
 
     GraphConfig(
         float step_size_x = 0.5, float step_size_y = 1, float offset_bidirectional = 0.1, float offset_purl = 0.4,
-        float offset_knit = -0.3, float yarn_thickness = 0.03, float loop_width = 1.0, Eigen::Vector3f up_vector = Eigen::Vector3f(1, 0, 0),
-        Eigen::Vector3f right_vector = Eigen::Vector3f(0, 0, 1)
+        float offset_knit = -0.3, float yarn_thickness = 0.03, float loop_width = 1.0,
+        Eigen::Vector3f up_vector = Eigen::Vector3f(1, 0, 0), Eigen::Vector3f right_vector = Eigen::Vector3f(0, 0, 1),
+        bool flatten_round_top = false
     ) {
       this->step_size_x = step_size_x;
       this->step_size_y = step_size_y;
@@ -29,6 +31,7 @@ namespace knitsim {
       this->loop_width = loop_width;
       this->up_vector = up_vector;
       this->right_vector = right_vector;
+      this->flatten_round_top = flatten_round_top;
     }
   };
 

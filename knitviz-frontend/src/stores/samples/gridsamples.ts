@@ -92,7 +92,7 @@ const gridSampleMap: Record<string, GridSample> = {
       return {
         row,
         col,
-        type: "YARN_OVER",
+        type: (row + col) % 4 < 2 ? "YARN_OVER" : "DECREASE",
         color: "#ff8d73",
       };
     }),
@@ -110,7 +110,11 @@ const gridSampleMap: Record<string, GridSample> = {
         return {
           row,
           col,
-          type: "YARN_OVER",
+          type: distanceToCenter === 2
+            ? "YARN_OVER"
+            : distanceToCenter === 1
+              ? "DECREASE"
+              : "PURL",
           color: "#be6aff",
         };
       }

@@ -9,12 +9,14 @@ for (let row = 0; row < 16; row++) {
 }`,
   Beanie: `this.cast_on(24, 'round')
 let stitches = 24
-for (let i = 0; i < 8; i++) {
+while (stitches > 4) {
   this.color('#6b8afd')
   this.knit(stitches, 'knit')
   this.end_row()
   stitches -= 2
-}`,
+}
+this.knit(stitches, 'knit')
+this.end_row()`,
   "Ribbed Panel": `this.cast_on(28, 'flat')
 for (let row = 0; row < 14; row++) {
   this.color(row % 2 === 0 ? '#3f6fcf' : '#6ea9ff')

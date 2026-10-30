@@ -1,7 +1,8 @@
 import * as d3 from "d3";
 import * as THREE from "three";
 import { KnitEdge, KnitEdgeDirection, KnitGraph, KnitMode, KnitNode, KnitNodeType, KnitSide, KnittingState } from "..";
-import { OrbitControls } from "three/examples/jsm/Addons.js";
+import { PreviewOrbit } from "@/three/previewOrbit";
+import type { VizRendererStage } from "@/three/vizRendererStage";
 import { fromVec3, toVec3 } from "../helpers";
 import * as mjs from "mathjs";
 import GUI from "three/examples/jsm/libs/lil-gui.module.min.js";
@@ -36,7 +37,7 @@ export class PatternViz3D {
   three_div: HTMLElement = null;
   camera: THREE.PerspectiveCamera = null;
   scene: THREE.Scene = null;
-  renderer: THREE.Renderer = null;
+  renderer: THREE.WebGLRenderer = null;
   raycaster = new THREE.Raycaster();
   inst_nodemesh: THREE.InstancedMesh = null;
   inst_knitmesh: THREE.InstancedMesh = null;
@@ -70,10 +71,13 @@ export class PatternViz3D {
   changed_highlighted_node = false;
   show_normals = false;
   show_edges = false;
-  show_forces = true;
+  show_forces = false;
   show_nodes = true;
   deferCompute = false;
-  controls: OrbitControls | null = null;
+  controls: PreviewOrbit | null = null;
+  private sharedStage: VizRendererStage;
+  private contentRoot = new THREE.Group();
+  private isFlipped = false;
 
   isDrawingMode = false;
   activeDrawColor = "#000000";
@@ -88,10 +92,12 @@ export class PatternViz3D {
   constructor(
     public query_renderer: string,
     graph: KnitGraph,
-    options: { deferCompute?: boolean } = {},
+    options: { deferCompute?: boolean; stage: VizRendererStage },
   ) {
     this.graph = new KnitGraph3D(graph);
+    this.show_forces = !this.graph.round;
     this.deferCompute = options.deferCompute ?? false;
+    this.sharedStage = options.stage;
     this.init();
   }
   stepSim(time: number) {
@@ -106,9 +112,21 @@ export class PatternViz3D {
       this.inst_nodemesh.instanceMatrix.needsUpdate = true;
     }
 
+    this.render();
     return accumulated_movement;
   }
   private initWasm() {
+    const rowSizes = new Map<number, number>();
+    for (const node of Object.values(this.graph.nodes)) {
+      rowSizes.set(node.row_number, (rowSizes.get(node.row_number) ?? 0) + 1);
+    }
+    const rowNumbers = [...rowSizes.keys()].sort((a, b) => a - b);
+    const lastRowNumber = rowNumbers[rowNumbers.length - 1];
+    const previousRowNumber = rowNumbers[rowNumbers.length - 2];
+    const lastRoundSize = rowSizes.get(lastRowNumber) ?? 0;
+    const previousRoundSize = rowSizes.get(previousRowNumber) ?? lastRoundSize;
+    const hasShapedCrown = this.graph.round && lastRoundSize <= 4 && previousRoundSize > lastRoundSize;
+
     this.graph.initGraphWASM({
       step_size_x: this.knit_dimensions.step_size_x,
       step_size_y: this.knit_dimensions.step_size_y,
@@ -118,7 +136,8 @@ export class PatternViz3D {
       yarn_thickness: this.knit_dimensions.yarn_thickness,
       loop_width: this.knit_dimensions.loop_width,
       up_vector: new KnitSimModule.Vector3f(1, 0, 0),
-      right_vector: new KnitSimModule.Vector3f(0, 0, 1)
+      right_vector: new KnitSimModule.Vector3f(0, 0, this.graph.round ? -1 : 1),
+      flatten_round_top: this.graph.round && !hasShapedCrown,
     });
   }
   private initPool() {
@@ -131,8 +150,11 @@ export class PatternViz3D {
     }
   }
 
-  private constructTemplateKnit(loop_width: number): Array<THREE.Vector3> {
+  private createYarnMaterial(color: number | string): THREE.Material {
+    return new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide });
+  }
 
+  private constructTemplateKnit(loop_width: number): Array<THREE.Vector3> {
     let knit_path_arr = []
     // connection to prev node
     // knit_path_arr.push(new THREE.Vector3(0.5*0.5, 0, 0));
@@ -177,8 +199,7 @@ export class PatternViz3D {
         6,
         false,
       );
-      let tube_material =
-        new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+      let tube_material = this.createYarnMaterial(0xffffff);
     this.inst_tubemesh = new THREE.InstancedMesh(tube_geometry, tube_material, Object.keys(this.graph.nodes).length)
 
 
@@ -194,14 +215,55 @@ export class PatternViz3D {
         6,
         false,
       );
-      let stitch_material =
-        new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+      let stitch_material = this.createYarnMaterial(0xffffff);
       this.inst_knitmesh = new THREE.InstancedMesh(stitch_geometry, stitch_material, Object.keys(this.graph.nodes).length);
 
-    this.scene.add(this.inst_nodemesh);
-    this.scene.add(this.inst_tubemesh);
-    this.scene.add(this.inst_knitmesh);
+    this.contentRoot.add(this.inst_nodemesh);
+    this.contentRoot.add(this.inst_tubemesh);
+    this.contentRoot.add(this.inst_knitmesh);
 
+  }
+
+  private stabilizeTerminalRoundTransform(node: KnitNode3D, transformArray: THREE.Vector3[]) {
+    if (!this.graph.round || node.type === KnitNodeType.BIND_OFF || transformArray.length < 5) return;
+
+    const hasColumnAbove = this.graph.edges.some(
+      (edge) => edge.direction === KnitEdgeDirection.COLUMN && edge.from === node.id,
+    );
+    if (hasColumnAbove) return;
+
+    const row = Object.values(this.graph.nodes)
+      .filter((candidate) => candidate.row_number === node.row_number)
+      .sort((a, b) => a.col_number - b.col_number);
+    if (row.length < 2) return;
+
+    const index = row.findIndex((candidate) => candidate.id === node.id);
+    if (index < 0) return;
+    const previous = row[(index + row.length - 1) % row.length];
+    const next = row[(index + 1) % row.length];
+
+    const rowDirection = node.start_of_row
+      ? next.position.clone().sub(node.position)
+      : next.position.clone().sub(previous.position);
+    const yarnDirection = next.position.clone().sub(node.position);
+    if (rowDirection.lengthSq() > 1e-10) transformArray[2] = rowDirection;
+    if (yarnDirection.lengthSq() > 1e-10) transformArray[4] = yarnDirection;
+
+    const below = this.graph.edges
+      .filter((edge) => edge.direction === KnitEdgeDirection.COLUMN && edge.to === node.id)
+      .map((edge) => this.graph.nodes[edge.from])
+      .filter(Boolean);
+    if (below.length === 0) return;
+
+    const belowCentre = below.reduce(
+      (sum, candidate) => sum.add(candidate.position),
+      new THREE.Vector3(),
+    ).divideScalar(below.length);
+    const columnDirection = node.position.clone().sub(belowCentre);
+    if (columnDirection.lengthSq() <= 1e-10) return;
+    columnDirection.normalize();
+    transformArray[3] = columnDirection;
+    transformArray[1] = transformArray[0].clone().add(columnDirection);
   }
 
   updateInstancedMeshes(node : KnitNode3D) {
@@ -214,6 +276,8 @@ export class PatternViz3D {
       let vec = transform_list.get(id);
       return new THREE.Vector3(vec.x, vec.y, vec.z);
     });
+
+    this.stabilizeTerminalRoundTransform(node, transform_array);
 
     // Some stitches (e.g., cast-on/degenerated paths) can yield incomplete paths.
     // Skip instanced transform updates for those nodes instead.
@@ -254,7 +318,6 @@ export class PatternViz3D {
       let yz_shear = -tmp.z;
 
       knit_matrix.multiply(new THREE.Matrix4().makeShear(0, 0, yx_shear, yz_shear, 0, 0));
-
     } else { // if FLAT KnitModeC
       // rotate if PURL
       if(node.type == KnitNodeType.PURL) {
@@ -270,6 +333,11 @@ export class PatternViz3D {
         yz_shear = -yz_shear;
       }
       knit_matrix.multiply(new THREE.Matrix4().makeShear(0, 0, yx_shear, yz_shear, 0, 0));
+    }
+
+    if (node.mergeFanIn > 1) {
+      const widen = 1 + 0.75 * (node.mergeFanIn - 1);
+      knit_matrix.multiply(new THREE.Matrix4().makeScale(widen, 1, 1));
     }
 
     this.inst_knitmesh.setMatrixAt(node.id, knit_matrix);
@@ -320,8 +388,90 @@ export class PatternViz3D {
     this.inst_tubemesh.instanceColor.needsUpdate = true;
 
     // check for increase
-    if (transform_array.length > 6) return transform_array.slice(5, -1);
+    if (transform_array.length > 6) {
+      if (this.graph.round && !this.graph.hasIncreaseAfter(node)) {
+        return null;
+      }
+      return transform_array.slice(5, -1);
+    }
     return null;
+  }
+
+  private graphBounds() {
+    const box = new THREE.Box3();
+    this.contentRoot.updateMatrixWorld(true);
+    const worldPoint = new THREE.Vector3();
+    for (const key in this.graph.nodes) {
+      worldPoint.copy(this.graph.nodes[key].position).applyMatrix4(this.contentRoot.matrixWorld);
+      box.expandByPoint(worldPoint);
+    }
+    return box;
+  }
+
+  private yarnBounds() {
+    const box = this.graphBounds();
+
+    const includeObject = (object: THREE.Object3D | null | undefined) => {
+      if (!object) return;
+      object.updateMatrixWorld(true);
+      if (object instanceof THREE.InstancedMesh) {
+        object.computeBoundingBox();
+        if (object.boundingBox) {
+          box.union(object.boundingBox.clone().applyMatrix4(object.matrixWorld));
+        }
+      } else {
+        box.expandByObject(object, true);
+      }
+    };
+
+    includeObject(this.inst_knitmesh);
+    includeObject(this.inst_tubemesh);
+    for (const key in this.graph.nodes) includeObject(this.graph.nodes[key].mesh);
+    return box;
+  }
+
+  private updateFloor(box: THREE.Box3) {
+    const centre = box.getCenter(new THREE.Vector3());
+    const floorY = box.min.y - Math.max(this.graph.cfg.yarn_thickness * 2, 0.03);
+    this.sharedStage.setFloorPosition(centre.x, floorY, centre.z);
+  }
+
+  centreOrbit() {
+    const box = this.yarnBounds();
+    if (box.isEmpty() || !this.controls) return;
+    this.updateFloor(box);
+    const frameOptions = {
+      direction: new THREE.Vector3(0, 0, -1),
+      padding: 0.8,
+    };
+    this.sharedStage.frame(box, frameOptions);
+  }
+
+  frameGraph() {
+    const box = this.yarnBounds();
+    if (box.isEmpty()) return;
+    this.updateFloor(box);
+    const frameOptions = {
+      direction: new THREE.Vector3(0.35, 0.45, -0.85),
+      padding: 1.05,
+    };
+    this.sharedStage.frame(box, frameOptions);
+  }
+
+  private applyDisplayRotation() {
+    this.contentRoot.rotation.x = (this.graph.round ? 0 : Math.PI) + (this.isFlipped ? Math.PI : 0);
+    this.contentRoot.updateMatrixWorld(true);
+  }
+
+  setFlipped(enabled: boolean) {
+    this.isFlipped = enabled;
+    this.applyDisplayRotation();
+    if (this.graph.round) {
+      this.frameGraph();
+    } else {
+      this.centreOrbit();
+    }
+    this.render();
   }
 
   computeKnits() {
@@ -329,6 +479,7 @@ export class PatternViz3D {
     this.initPool();
     this.graph.computeHeuristics();
     this.initInstancedMeshes();
+    this.applyDisplayRotation();
     console.log("Computed graph", this.graph);
     let id = 0;
     let sphere_matrix = new THREE.Matrix4();
@@ -340,14 +491,14 @@ export class PatternViz3D {
       this.inst_nodemesh.setColorAt(node.id, this.pool.sphere_material[node.side].color);
 
       sphere_matrix.setPosition(node.position.x, node.position.y, node.position.z);
-      if (node.start_of_row)
+      if (node.start_of_row && !this.graph.round)
       {
         sphere_matrix.scale(new THREE.Vector3(3, 3, 3));
       }
 
       this.inst_nodemesh.setMatrixAt(node.id, sphere_matrix);
 
-      if (node.start_of_row)
+      if (node.start_of_row && !this.graph.round)
       {
         sphere_matrix.scale(new THREE.Vector3(1/3, 1/3, 1/3));
       }
@@ -362,7 +513,7 @@ export class PatternViz3D {
           0xffff00 + id,
         );
         outgoing_helper.visible = this.show_edges;
-        this.scene.add(outgoing_helper);
+        this.contentRoot.add(outgoing_helper);
         node.outgoing_helpers.push(outgoing_helper);
       }
       this.inst_nodemesh.visible = this.show_nodes;
@@ -370,10 +521,10 @@ export class PatternViz3D {
 
       node.normal_helper = new THREE.ArrowHelper(node.normal, node.position, 1, 0xff0000);
       node.normal_helper.visible = this.show_normals;
-      this.scene.add(node.normal_helper);
+      this.contentRoot.add(node.normal_helper);
       node.force_helper = new THREE.ArrowHelper(node.force, node.position, 1, 0x00ff00);
       node.force_helper.visible = this.show_forces;
-      this.scene.add(node.force_helper);
+      this.contentRoot.add(node.force_helper);
 
       leftover_path = null;
       if(node.instanced) {
@@ -383,7 +534,6 @@ export class PatternViz3D {
       if(!node.instanced || leftover_path != null) { // if not instanced or increase, make new mesh
 
 
-        let knit_path = null
         let knit_path_arr = null
         if(leftover_path == null) {
 
@@ -394,15 +544,10 @@ export class PatternViz3D {
           this.inst_tubemesh.instanceMatrix.needsUpdate = true;
 
           // impose order on points by projecting them onto the plane and sorting them, first one is the 'reference' for the coordinate system
-          knit_path = this.graph.graph_wasm.knitPath(node.id);
-          knit_path_arr = new Array(knit_path.size()).fill(0).map((_, id) => {
-            let vec = knit_path.get(id);
-            return new THREE.Vector3(vec.x, vec.y, vec.z);
-          });
+          knit_path_arr = this.graph.knitPathPoints(node);
         } else {
           knit_path_arr = leftover_path;
         }
-
 
         let curve = new THREE.CatmullRomCurve3(knit_path_arr);
 
@@ -410,14 +555,14 @@ export class PatternViz3D {
         let geometry = new THREE.TubeGeometry(
           curve,
           knit_path_arr.length * 8,
-          node.yarnSpec.weight * this.knit_dimensions.yarn_thickness,
+          node.yarnSpec.weight * this.graph.cfg.yarn_thickness,
           6,
           false,
         );
 
-        let  material =
+        let material =
           this.pool.yarn_material[node.yarnSpec.color] ||
-          new THREE.MeshBasicMaterial({ color: node.yarnSpec.color, side: THREE.DoubleSide });
+          this.createYarnMaterial(node.yarnSpec.color);
 
 
         let mesh = new THREE.Mesh(geometry, material);
@@ -426,7 +571,7 @@ export class PatternViz3D {
         node.yarn_geometry = geometry;
         node.material = material;
         node.mesh = mesh;
-        this.scene.add(mesh);
+        this.contentRoot.add(mesh);
 
       this.pool.yarn_material[node.yarnSpec.color] = material;
       id++;
@@ -439,90 +584,54 @@ export class PatternViz3D {
     // let color = new THREE.Color();
     // this.inst_nodemesh.getColorAt(25, color);
     // console.log("Color at id ", 25, " ", color);
+    if (this.graph.round) {
+      this.frameGraph();
+    } else {
+      this.centreOrbit();
+    }
   }
 
   init() {
-    d3.select(this.query_renderer).selectAll(".threed_graph").remove();
-    this.three_div = d3.select(this.query_renderer).append("div").attr("class", "threed_graph").node();
+    const host = document.querySelector(this.query_renderer) as HTMLElement | null;
+    if (!host) {
+      throw new Error(`Preview host not found: ${this.query_renderer}`);
+    }
+    d3.select(host).selectAll(".threed_graph").remove();
+
+    this.three_div = host;
+    this.width = host.clientWidth;
+    this.height = host.clientHeight;
+    this.renderer = this.sharedStage.renderer;
+    this.camera = this.sharedStage.camera;
+    this.scene = this.sharedStage.scene;
+    this.controls = this.sharedStage.controls;
+    this.contentRoot = new THREE.Group();
+    this.contentRoot.name = "knit-graph-content";
+    this.scene.add(this.contentRoot);
 
     this.three_div.addEventListener("mousemove", this.pointerMoveHandler);
     this.three_div.addEventListener("click", this.clickHandler);
     this.three_div.addEventListener("mousedown", this.mouseDownHandler);
     this.three_div.addEventListener("mouseup", this.mouseUpHandler);
-    
-    this.width = this.three_div.clientWidth;
-    this.height = this.three_div.clientHeight;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    this.renderer.setSize(this.width, this.height);
-    this.three_div.appendChild(this.renderer.domElement);
-
-
-    this.camera = new THREE.PerspectiveCamera(75, this.width / this.height, 0.2, 1500);
-    this.camera.aspect = this.width / this.height;
-
-    this.camera.position.set(0, 0, -35);
-    this.camera.updateProjectionMatrix();
-
-    this.scene = new THREE.Scene();
-    this.scene.position.x = 0;
-    // this.scene.position.y = -this.dimensions.height / 2;
-    this.scene.position.z = 0;
-    this.scene.background = new THREE.Color(0xe8fff9);
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
     this.gui = new GUI();
-    this.gui.add(this, "show_normals", this.show_normals);
-    this.gui.add(this, "show_edges", this.show_edges);
-    this.gui.add(this, "show_nodes", this.show_nodes);
-    this.gui.add(this, "show_forces", this.show_forces);
+    this.gui.add(this, "show_normals", this.show_normals).onChange(() => this.render());
+    this.gui.add(this, "show_edges", this.show_edges).onChange(() => this.render());
+    this.gui.add(this, "show_nodes", this.show_nodes).onChange(() => this.render());
+    this.gui.add(this, "show_forces", this.show_forces).onChange(() => this.render());
 
     this.initPool();
     if (!this.deferCompute) {
       this.computeKnits();
     }
-
-    const controls = new OrbitControls(this.camera, this.renderer.domElement);
-    controls.screenSpacePanning = true;
-    controls.maxPolarAngle = Math.PI / 2.5;
-    controls.minDistance = 10;
-    controls.maxDistance = 650;
-    // controls.autoRotate = true;
-    controls.addEventListener("change", () => {
-      // tooltip.clear();
-      if (this.renderer && this.renderer instanceof THREE.WebGLRenderer) {
-        this.renderer.clear();
-      }
-      this.renderer.render(this.scene, this.camera);
-    });
-    controls.update();
-    this.controls = controls;
     this.renderer.render(this.scene, this.camera);
-
-    // let counter = 0;
-    // let sum = 0;
-
-    (this.renderer as any).setAnimationLoop(() => {
-      this.controls?.update();
-      // let startTime = performance.now();
-      this.render();
-      // let endTime = performance.now();
-      // let time = endTime-startTime;
-      // counter++;
-      // sum += endTime-startTime;
-      // if (counter == 100) {
-      //   counter = 0;
-      //   sum = sum / 100;
-      //   console.log(sum);
-      // }
-
-      // console.log(time);
-    });
   }
   render() {
     if (!this.renderer || !this.scene || !this.camera || !this.three_div) {
       return;
     }
 
+    if (this.inst_nodemesh) this.inst_nodemesh.visible = this.show_nodes;
     for (const node_id in this.graph.nodes) {
       const node = this.graph.nodes[node_id];
       node.preRender(this);
@@ -615,7 +724,7 @@ export class PatternViz3D {
     if (!this.inst_nodemesh) {
       return;
     }
-    if (node.id != this.highlighted_node?.id) {
+    if (node?.id != this.highlighted_node?.id) {
       this.changed_highlighted_node = true;
 
       for (const listener of this.eventListeners.mouseout) {
@@ -693,6 +802,7 @@ export class PatternViz3D {
     for (const listener of this.eventListeners.mouseover) {
       listener(node);
     }
+    this.render();
   }
   
   paintNode(node: KnitNode3D) {
@@ -705,7 +815,7 @@ export class PatternViz3D {
 
     const material =
       this.pool.yarn_material[this.activeDrawColor] ||
-      new THREE.MeshBasicMaterial({ color: colorValue, side: THREE.DoubleSide });
+      this.createYarnMaterial(colorValue);
     
     node.material = material;
     node.mesh.material = material;
@@ -751,6 +861,7 @@ export class PatternViz3D {
     for (const listener of this.eventListeners.click) {
       listener(clickedNode);
     }
+    this.render();
   }
   eventListeners: Record<PatternViz3DEvents, ((node: KnitNode3D | null) => void)[]> = Object.keys(PatternViz3DEvents)
     .map((event) => {
@@ -795,37 +906,24 @@ export class PatternViz3D {
 
     this.width = nextWidth;
     this.height = nextHeight;
-    this.camera.aspect = this.width / this.height;
-    this.camera.updateProjectionMatrix();
-    this.renderer.setSize(this.width, this.height);
-    this.render();
+    this.sharedStage.resize();
   }
   dispose() {
-    if (this.renderer && this.renderer instanceof THREE.WebGLRenderer) {
-      this.renderer.setAnimationLoop(null);
-    }
-    if (this.controls) {
-      this.controls.dispose();
-      this.controls = null;
-    }
     if (this.three_div) {
+      d3.select(this.three_div).selectAll(".overlay-text").remove();
       this.three_div.removeEventListener("mousemove", this.pointerMoveHandler);
       this.three_div.removeEventListener("click", this.clickHandler);
       this.three_div.removeEventListener("mousedown", this.mouseDownHandler);
       this.three_div.removeEventListener("mouseup", this.mouseUpHandler);
-      this.three_div.remove();
       this.three_div = null;
     }
     this.hovered_node = null;
     if (this.scene) {
-      this.scene.clear();
+      this.scene.remove(this.contentRoot);
     }
     if (this.gui) {
       this.gui.destroy();
       this.gui = null;
-    }
-    if (this.renderer && this.renderer instanceof THREE.WebGLRenderer) {
-      this.renderer.dispose();
     }
     this.graph.dispose();
   }

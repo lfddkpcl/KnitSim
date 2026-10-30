@@ -13,6 +13,7 @@ export class KnitNode3D extends KnitNode {
   normal: THREE.Vector3 = new THREE.Vector3();
   force: THREE.Vector3 = new THREE.Vector3();
   instanced: boolean = true;
+  mergeFanIn: number = 1;
 
   node_sphere_mesh: THREE.Mesh;
   normal_helper: THREE.ArrowHelper;

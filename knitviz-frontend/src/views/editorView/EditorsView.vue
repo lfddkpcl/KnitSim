@@ -7,6 +7,7 @@ import type { KnitNode3D } from "@/knitgraph/3d/node";
 import Code from "@/components/editor/CodeEditor.vue";
 import GridEditor from "@/components/editor/GridEditor.vue";
 import NodeEditor from "@/components/editor/NodeEditor.vue";
+import SimulateEditor from "@/components/editor/SimulateEditor.vue";
 import VisualEditor from "@/components/editor/VisualEditor.vue";
 import VizRenderer from "@/components/editor/VizRenderer.vue";
 import Btn from "@/components/ui/Btn.vue";
@@ -27,11 +28,14 @@ const vizRendererRef = ref<{
   cancelRun: () => void;
   toggleRun: (snapshot: typeof store.state.graph) => void;
   toggleSimulation: (timeStep: number) => void;
+  generateFabric: () => void;
+  togglePreview: () => void;
   getStatus: () => VizStatus;
   getViz: () => PatternViz3D | null;
 } | null>(null);
 
 const activeTab = ref<EditorType>(EditorType.VISUAL);
+const isSimulateTab = computed(() => activeTab.value === EditorType.SIMULATE);
 const overlayManager = shallowRef<KnitGraphOverlayManager | null>(null);
 const patternViz = shallowRef<PatternViz3D | null>(null);
 const selectedNodeId = ref<number | null>(null);
@@ -43,8 +47,11 @@ const preview = reactive<VizStatus>({
   isRunning: false,
   isCancelling: false,
   isSimulationStopping: false,
+  isDropResettable: false,
   step: 0,
   accDelta: 0,
+  nodes: 0,
+  springs: 0,
 });
 
 const simulationTimeStep = ref(100);
@@ -54,11 +61,16 @@ const toastTimerId = ref<number | null>(null);
 
 const isDrawingMode = ref(false);
 const drawingColor = ref("#000000");
+const isFlipped = ref(false);
 const hasPendingDrafts = computed(() => Object.keys(nodeDrafts.value).length > 0);
 
 const isRunActive = computed(() => preview.isLoading || preview.isReady);
 const runLabel = computed(() => (isRunActive.value ? BUTTON_LABELS.HIDE_PREVIEW ?? 'Hide Preview' : BUTTON_LABELS.SHOW_PREVIEW ?? 'Show Preview'));
 const generateLabel = computed(() => {
+  if (isSimulateTab.value) {
+    return BUTTON_LABELS.GENERATE_FROM_SIMULATE;
+  }
+
   if (activeTab.value === EditorType.NODE) {
     return BUTTON_LABELS.APPLY_NODE_CHANGES;
   }
@@ -91,11 +103,19 @@ const simulationLabel = computed(() => {
     return STATUS_LABELS.UNAVAILABLE;
   }
 
+  if (isSimulateTab.value) {
+    return preview.isDropResettable ? STATUS_LABELS.RESET_DROP : STATUS_LABELS.DROP_FABRIC;
+  }
+
   return preview.isRunning ? STATUS_LABELS.STOP : STATUS_LABELS.START;
 });
 
 const simulationDisabled = computed(() => {
   return !preview.isReady || preview.isCancelling || preview.isSimulationStopping;
+});
+
+const generateDisabled = computed(() => {
+  return isSimulateTab.value && preview.isRunning;
 });
 
 const snapshotNodesForEditor = computed(() => {
@@ -141,8 +161,11 @@ const resetViz = (clearSelection = true) => {
     isRunning: false,
     isCancelling: false,
     isSimulationStopping: false,
+    isDropResettable: false,
     step: 0,
     accDelta: 0,
+    nodes: 0,
+    springs: 0,
   });
 };
 
@@ -229,6 +252,11 @@ const attachVizSelection = (vizInstance: PatternViz3D | null) => {
 };
 
 const startRun = () => {
+  if (isSimulateTab.value) {
+    vizRendererRef.value?.togglePreview();
+    return;
+  }
+
   if (store.state.graph.nodes.length === 0) {
     return;
   }
@@ -242,7 +270,11 @@ const cancelRun = () => {
     return;
   }
 
-  vizRendererRef.value?.cancelRun();
+  if (isSimulateTab.value) {
+    vizRendererRef.value?.togglePreview();
+  } else {
+    vizRendererRef.value?.cancelRun();
+  }
   resetViz();
 };
 
@@ -271,6 +303,9 @@ const triggerAutoPreview = () => {
 
 const generateFromActiveEditor = () => {
   switch (activeTab.value) {
+    case EditorType.SIMULATE:
+      vizRendererRef.value?.generateFabric();
+      return;
     case EditorType.NODE:
       applyAllNodeChanges();
       return;
@@ -324,6 +359,7 @@ const onVizReady = (vizInstance: PatternViz3D) => {
   attachOverlayManager(vizInstance);
   vizInstance.setDrawingMode(isDrawingMode.value);
   vizInstance.setDrawingColor(drawingColor.value);
+  vizInstance.setFlipped(isFlipped.value);
 };
 
 const clearToastTimer = () => {
@@ -357,7 +393,10 @@ onUnmounted(() => {
   // vizRendererRef.value?.dispose() removed: cleanup is now handled internally
 });
 
-watch(activeTab, () => {
+watch(activeTab, (nextTab, previousTab) => {
+  if (nextTab === EditorType.SIMULATE || previousTab === EditorType.SIMULATE) {
+    resetViz();
+  }
   syncOverlayForActiveTab();
 });
 
@@ -367,6 +406,10 @@ watch(isDrawingMode, (enabled) => {
 
 watch(drawingColor, (color) => {
   vizRendererRef.value?.getViz()?.setDrawingColor(color);
+});
+
+watch(isFlipped, (enabled) => {
+  vizRendererRef.value?.getViz()?.setFlipped(enabled);
 });
 </script>
 
@@ -381,11 +424,22 @@ watch(drawingColor, (color) => {
         <button class="tab" :class="{ active: activeTab === editorType.CODE }" @click="activeTab = editorType.CODE">Code</button>
         <button class="tab" :class="{ active: activeTab === editorType.GRID }" @click="activeTab = editorType.GRID">Grid</button>
         <button class="tab" :class="{ active: activeTab === editorType.NODE }" @click="activeTab = editorType.NODE">Node</button>
+        <button
+          class="tab"
+          :class="{ active: activeTab === editorType.SIMULATE }"
+          @click="activeTab = editorType.SIMULATE"
+        >
+          Simulate
+        </button>
       </div>
 
       <div class="editor-content">
         <Code ref="codeEditorRef" v-show="activeTab === editorType.CODE" @generate="onCodeGenerate" />
-        <GridEditor ref="gridEditorRef" v-show="activeTab === editorType.GRID" @generate="onGridGenerate" />
+        <GridEditor
+          ref="gridEditorRef"
+          v-show="activeTab === editorType.GRID"
+          @generate="onGridGenerate"
+        />
         <VisualEditor
           ref="visualEditorRef"
           v-show="activeTab === editorType.VISUAL"
@@ -401,6 +455,7 @@ watch(drawingColor, (color) => {
           @select-node="selectNodeFromEditor"
           @update-node-drafts="nodeDrafts = $event"
         />
+        <SimulateEditor v-show="activeTab === editorType.SIMULATE" />
       </div>
     </section>
 
@@ -408,46 +463,76 @@ watch(drawingColor, (color) => {
       <header class="panel-header">
         <h3>Preview and Controls</h3>
       </header>
-      <div class="preview-toolbar">
-        <Btn btn_width="10.5rem" btn_height="2.7rem" @click="generateFromActiveEditor">{{ generateLabel }}</Btn>
-        <Btn btn_width="8rem" btn_height="2.7rem" @click="renderGraph">{{ runLabel }}</Btn>
-        <Btn
-          btn_width="10rem"
-          btn_height="2.7rem"
-          :disabled="simulationDisabled"
-          @click="maybeStartSimulation"
-          >{{ simulationLabel }}</Btn
-        >
+      <div class="knit-preview">
+        <div class="preview-toolbar">
+          <Btn
+            btn_width="10.5rem"
+            btn_height="2.7rem"
+            :disabled="generateDisabled"
+            @click="generateFromActiveEditor"
+          >
+            {{ generateLabel }}
+          </Btn>
+          <Btn btn_width="8rem" btn_height="2.7rem" @click="renderGraph">{{ runLabel }}</Btn>
+          <Btn
+            btn_width="10rem"
+            btn_height="2.7rem"
+            :disabled="simulationDisabled"
+            @click="maybeStartSimulation"
+          >
+            {{ simulationLabel }}
+          </Btn>
+        </div>
+        <div class="stats-list">
+          <span>
+            <strong>Status:</strong>
+            {{
+              preview.isLoading
+                ? STATUS_LABELS.PREPARING
+                : preview.isReady
+                  ? STATUS_LABELS.READY
+                  : STATUS_LABELS.IDLE
+            }}
+          </span>
+          <span><strong>Nodes:</strong> {{ isSimulateTab ? preview.nodes : store.state.graph.nodes.length }}</span>
+          <span v-if="isSimulateTab"><strong>Springs:</strong> {{ preview.springs }}</span>
+          <span><strong>Step:</strong> {{ preview.step }}</span>
+          <span><strong>Delta:</strong> {{ preview.accDelta.toFixed(6) }}</span>
+        </div>
+        <div class="drawing-controls" v-if="preview.isReady && !isSimulateTab">
+          <label class="control-group">
+            <input type="checkbox" v-model="isDrawingMode" />
+            <span>Drawing Mode</span>
+          </label>
+          <label class="control-group">
+            <input type="checkbox" v-model="isFlipped" />
+            <span>Flip</span>
+          </label>
+          <label class="control-group" v-if="isDrawingMode">
+            <span>Color:</span>
+            <input type="color" v-model="drawingColor" />
+          </label>
+          <Btn
+            v-if="isDrawingMode"
+            btn_width="9.5rem"
+            btn_height="2.2rem"
+            :disabled="!hasPendingDrafts"
+            @click="applyAllNodeChanges"
+          >
+            Apply Drawings
+          </Btn>
+        </div>
+        <div class="toast toast-error" v-if="toastVisible" role="status" aria-live="polite">
+          {{ toastMessage }}
+        </div>
+        <VizRenderer
+          ref="vizRendererRef"
+          :is-simulate-mode="isSimulateTab"
+          @status="onVizStatus"
+          @viz-ready="onVizReady"
+          @error="onVizError"
+        />
       </div>
-      <div class="stats-list">
-        <span><strong>Status:</strong> {{ preview.isLoading ? STATUS_LABELS.PREPARING : preview.isReady ? STATUS_LABELS.READY : STATUS_LABELS.IDLE }}</span>
-        <span><strong>Nodes:</strong> {{ store.state.graph.nodes.length }}</span>
-        <span><strong>Step:</strong> {{ preview.step }}</span>
-        <span><strong>Delta:</strong> {{ preview.accDelta.toFixed(6) }}</span>
-      </div>
-      <div class="drawing-controls" v-if="preview.isReady">
-        <label class="control-group">
-          <input type="checkbox" v-model="isDrawingMode" />
-          <span>Drawing Mode</span>
-        </label>
-        <label class="control-group" v-if="isDrawingMode">
-          <span>Color:</span>
-          <input type="color" v-model="drawingColor" />
-        </label>
-        <Btn
-          v-if="isDrawingMode"
-          btn_width="9.5rem"
-          btn_height="2.2rem"
-          :disabled="!hasPendingDrafts"
-          @click="applyAllNodeChanges"
-        >
-          Apply Drawings
-        </Btn>
-      </div>
-      <div class="toast toast-error" v-if="toastVisible" role="status" aria-live="polite">
-        {{ toastMessage }}
-      </div>
-      <VizRenderer ref="vizRendererRef" @status="onVizStatus" @viz-ready="onVizReady" @error="onVizError" />
     </section>
   </main>
 </template>
@@ -495,6 +580,13 @@ watch(drawingColor, (color) => {
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+
+.knit-preview {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 .preview-toolbar {

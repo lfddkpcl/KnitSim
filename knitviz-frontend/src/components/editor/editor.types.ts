@@ -7,8 +7,11 @@ export type VizStatus = {
   isRunning: boolean;
   isCancelling: boolean;
   isSimulationStopping: boolean;
+  isDropResettable: boolean;
   step: number;
   accDelta: number;
+  nodes: number;
+  springs: number;
 };
 
 export type NodeDraft = GraphNodeSnapshot;

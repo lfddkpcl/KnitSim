@@ -35,6 +35,59 @@ const clone = <T>(value: T): T => {
   return JSON.parse(JSON.stringify(value)) as T;
 };
 
+type SerializedBlock = {
+  kind?: "block";
+  type: string;
+  fields?: Record<string, string | number>;
+  inputs?: Record<string, { block: SerializedBlock }>;
+  next?: { block: SerializedBlock };
+};
+
+const chainBlocks = (...blocks: SerializedBlock[]): SerializedBlock => {
+  for (let index = 0; index < blocks.length - 1; index++) {
+    blocks[index].next = { block: blocks[index + 1] };
+  }
+
+  return blocks[0];
+};
+
+const createStitchBlock = (
+  type: "knit_knit_color",
+  stitches: number,
+  color: string,
+): SerializedBlock => ({
+  type,
+  fields: { STITCHES: stitches, COLOR: color },
+});
+
+const createRowBlock = (body: SerializedBlock): SerializedBlock => ({
+  type: "knit_row",
+  inputs: { DO: { block: body } },
+});
+
+const createBeaniePreset = (): SerializedBlock => {
+  const color = "#6b8afd";
+  const rows: number[] = [];
+  let stitches = 24;
+
+  while (stitches > 4) {
+    rows.push(stitches);
+    stitches -= 2;
+  }
+  rows.push(stitches);
+
+  return chainBlocks(
+    {
+      kind: "block",
+      type: "knit_cast_on",
+      fields: { STITCHES: 24, MODE: "ROUND" },
+    },
+    ...rows.map((rowStitches) =>
+      createRowBlock(createStitchBlock("knit_knit_color", rowStitches, color)),
+    ),
+  );
+};
+
 const samplePresets = {
   stripedPattern: {
     kind: "block",
@@ -190,104 +243,7 @@ const samplePresets = {
       },
     },
   },
-  beanie: {
-    kind: "block",
-    type: "knit_cast_on",
-    fields: {
-      STITCHES: 24,
-      MODE: "ROUND",
-    },
-    next: {
-      block: {
-        type: "knit_repeat",
-        fields: {
-          TIMES: 6,
-        },
-        inputs: {
-          DO: {
-            block: {
-              type: "knit_row",
-              inputs: {
-                DO: {
-                  block: {
-                    type: "knit_knit_color",
-                    fields: {
-                      STITCHES: 24,
-                      COLOR: "#6b8afd",
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-        next: {
-          block: {
-            type: "knit_row",
-            inputs: {
-              DO: {
-                block: {
-                  type: "knit_knit_color",
-                  fields: {
-                    STITCHES: 22,
-                    COLOR: "#5f7de8",
-                  },
-                },
-              },
-            },
-            next: {
-              block: {
-                type: "knit_row",
-                inputs: {
-                  DO: {
-                    block: {
-                      type: "knit_knit_color",
-                      fields: {
-                        STITCHES: 20,
-                        COLOR: "#5670d1",
-                      },
-                    },
-                  },
-                },
-                next: {
-                  block: {
-                    type: "knit_row",
-                    inputs: {
-                      DO: {
-                        block: {
-                          type: "knit_knit_color",
-                          fields: {
-                            STITCHES: 18,
-                            COLOR: "#4f63ba",
-                          },
-                        },
-                      },
-                    },
-                    next: {
-                      block: {
-                        type: "knit_row",
-                        inputs: {
-                          DO: {
-                            block: {
-                              type: "knit_knit_color",
-                              fields: {
-                                STITCHES: 16,
-                                COLOR: "#4758a6",
-                              },
-                            },
-                          },
-                        },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  },
+  beanie: createBeaniePreset(),
 };
 
 const toWorkspaceBlock = (presetBlock: Record<string, unknown>, id: string) => {

@@ -95,7 +95,8 @@ EMSCRIPTEN_BINDINGS(wasm_module) {
       .field("yarn_thickness", &GraphConfig::yarn_thickness)
       .field("loop_width", &GraphConfig::loop_width)
       .field("up_vector", &GraphConfig::up_vector)
-      .field("right_vector", &GraphConfig::right_vector);
+      .field("right_vector", &GraphConfig::right_vector)
+      .field("flatten_round_top", &GraphConfig::flatten_round_top);
 
   class_<TraversalResult>("TraversalResult")
       .constructor<std::vector<Node>, std::vector<Edge>>()

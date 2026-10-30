@@ -262,7 +262,10 @@ namespace knitsim {
     void computeKnitPaths(float loop_width = 0.2, bool instancing = true);
     std::vector<Eigen::Vector3f> constructCastOn(Node node, float loop_width = 0.2, bool instancing = true);
     std::vector<Eigen::Vector3f> constructBindOff(Node node, float loop_width = 0.2);
-    Node getDecreaseNode(Node node, bool is_round = false);
+    bool getDecreaseNode(Node node, bool is_round, Node &out);
+    void rowNeighbours(const Node &node, bool is_round, Node &prev_node, Node &next_node);
+    bool resolveFrontNode(Node node, bool is_round, uint32_t yo_fix, Node &front_node, bool &terminal_live);
+    std::vector<Node> resolveIncreaseNodes(Node node, const Node &front_node, const Node &next_node, bool is_round);
     std::vector<Node> checkForIncrease(Node frontnext_node);
     std::vector<Eigen::Vector3f> constructIncrease(Node node, std::vector<Node> front_node, float loop_width, bool is_round = false);
     void computeHeuristicLayout();
